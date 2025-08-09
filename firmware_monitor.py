@@ -4,21 +4,22 @@ import requests
 import json
 import os
 
+FOTA_SERVER_URL = "http://fota-cloud-dn.ospserver.net/firmware"
 DEVICES = {
     "Galaxy Watch7": {
         "model": "SM-L310",
         "csc": "DBT",
         "urls": {
-            "stable": "http://fota-cloud-dn.ospserver.net/firmware/DBT/SM-L310/version.xml",
-            "test": "http://fota-cloud-dn.ospserver.net/firmware/DBT/SM-L310/version.test.xml"
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L310/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-L310/version.test.xml"
         }
     },
     "Galaxy S24+": {
         "model": "SM-S926B",
         "csc": "EUX",
         "urls": {
-            "stable": "http://fota-cloud-dn.ospserver.net/firmware/EUX/SM-S926B/version.xml",
-            "test": "http://fota-cloud-dn.ospserver.net/firmware/EUX/SM-S926B/version.test.xml"
+            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.xml",
+            "test": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.test.xml"
         }
     }
 }
