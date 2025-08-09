@@ -94,7 +94,6 @@ def compare_versions(old_data, new_data, firmware_type):
 
     old_versions = {v["version"]: v for v in old_data.get("versions", [])}
     new_versions = {v["version"]: v for v in new_data.get("versions", [])}
-
     for version in new_versions:
         if version not in old_versions:
             changes.append(f"Neue {firmware_type} Version hinzugefügt: {version} (Größe: {format_size(new_versions[version]['fwsize'])})")
@@ -126,7 +125,6 @@ def main():
             
             old_data = load_cached_data(device, firmware_type)
             changes = compare_versions(old_data, new_data, firmware_type.capitalize())
-            
             if changes:
                 print(f"\nÄnderungen für {device_name} ({firmware_type}-Firmware):")
                 for change in changes:
