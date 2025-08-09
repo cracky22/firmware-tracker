@@ -27,6 +27,16 @@ DEVICES = {
 DATA_DIR = "firmware_data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
+def format_size(bytes_size):
+    bytes_size = int(bytes_size)
+    if bytes_size >= 1073741824:
+        return f"{bytes_size / 1073741824:.2f} GB"
+    elif bytes_size >= 1048576:
+        return f"{bytes_size / 1048576:.2f} MB"
+    elif bytes_size >= 1024:
+        return f"{bytes_size / 1024:.2f} KB"
+    return f"{bytes_size} Bytes"
+
 def fetch_xml(url):
     try:
         response = requests.get(url, timeout=10)
@@ -87,9 +97,9 @@ def compare_versions(old_data, new_data, firmware_type):
 
     for version in new_versions:
         if version not in old_versions:
-            changes.append(f"Neue {firmware_type} Version hinzugefügt: {version} (Größe: {new_versions[version]['fwsize']} Bytes)")
+            changes.append(f"Neue {firmware_type} Version hinzugefügt: {version} (Größe: {format_size(new_versions[version]['fwsize'])})")
         elif old_versions[version]["fwsize"] != new_versions[version]["fwsize"]:
-            changes.append(f"{firmware_type} Version {version} geändert: Neue Größe {new_versions[version]['fwsize']} Bytes (vorher: {old_versions[version]['fwsize']} Bytes)")
+            changes.append(f"{firmware_type} Version {version} geändert: Neue Größe {format_size(new_versions[version]['fwsize'])} (vorher: {format_size(old_versions[version]['fwsize'])})")
 
     for version in old_versions:
         if version not in new_versions:
