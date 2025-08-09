@@ -21,6 +21,22 @@ DEVICES = {
             "stable": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.xml",
             "test": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.test.xml"
         }
+    },
+    "Galaxy Watch8": {
+        "model": "SM-L320",
+        "csc": "DBT",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L320/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-L320/version.test.xml"
+        }
+    },
+    "Galaxy S25": {
+        "model": "SM-S931B",
+        "csc": "EUX",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S931B/version.xml",
+            "test": f"{FOTA_SERVER_URL}/EUX/SM-S931B/version.test.xml"
+        }
     }
 }
 
