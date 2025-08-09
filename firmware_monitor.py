@@ -33,7 +33,7 @@ def fetch_xml(url):
         response.raise_for_status()
         return response.text
     except requests.RequestException as e:
-        print(f"RequestException at {url}: {e}")
+        print(f"Request Exception at {url}: {e}")
         return None
 
 def parse_xml(xml_content):
