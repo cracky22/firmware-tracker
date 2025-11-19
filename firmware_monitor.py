@@ -3,6 +3,7 @@ from datetime import datetime
 import requests
 import json
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 FOTA_SERVER_URL = "http://fota-cloud-dn.ospserver.net/firmware"
 DEVICES = {
@@ -75,6 +76,7 @@ DEVICES = {
 DATA_DIR = "firmware_data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
+
 def format_size(bytes_size):
     bytes_size = int(bytes_size)
     if bytes_size >= 1073741824:
@@ -85,14 +87,15 @@ def format_size(bytes_size):
         return f"{bytes_size / 1024:.2f} KB"
     return f"{bytes_size} Bytes"
 
+
 def fetch_xml(url):
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.text
-    except requests.RequestException as e:
-        print(f"Request Exception at {url}: {e}")
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return r.text
+    except Exception:
         return None
+
 
 def parse_xml(xml_content):
     if not xml_content:
@@ -100,10 +103,11 @@ def parse_xml(xml_content):
     try:
         root = ET.fromstring(xml_content)
         firmware_data = {"versions": []}
+
         latest = root.find(".//latest")
         if latest is not None and latest.text:
             firmware_data["latest"] = latest.text.strip()
-        
+
         for value in root.findall(".//upgrade/value"):
             version = value.text.strip() if value.text else ""
             rcount = value.get("rcount", "0")
@@ -113,22 +117,25 @@ def parse_xml(xml_content):
                 "rcount": rcount,
                 "fwsize": fwsize
             })
+
         return firmware_data
-    except ET.ParseError as e:
-        print(f"XML ParseError: {e}")
+    except ET.ParseError:
         return None
 
+
 def load_cached_data(device, firmware_type):
-    file_path = os.path.join(DATA_DIR, f"{device['model']}_{firmware_type}.json")
-    if os.path.exists(file_path):
-        with open(file_path, "r") as f:
+    path = os.path.join(DATA_DIR, f"{device['model']}_{firmware_type}.json")
+    if os.path.exists(path):
+        with open(path, "r") as f:
             return json.load(f)
     return None
 
+
 def save_cached_data(device, firmware_type, data):
-    file_path = os.path.join(DATA_DIR, f"{device['model']}_{firmware_type}.json")
-    with open(file_path, "w") as f:
+    path = os.path.join(DATA_DIR, f"{device['model']}_{firmware_type}.json")
+    with open(path, "w") as f:
         json.dump(data, f, indent=4)
+
 
 def compare_versions(old_data, new_data, firmware_type):
     changes = []
@@ -142,11 +149,19 @@ def compare_versions(old_data, new_data, firmware_type):
 
     old_versions = {v["version"]: v for v in old_data.get("versions", [])}
     new_versions = {v["version"]: v for v in new_data.get("versions", [])}
+
     for version in new_versions:
         if version not in old_versions:
-            changes.append(f"Neue {firmware_type} Version hinzugefügt: {version} (Größe: {format_size(new_versions[version]['fwsize'])})")
+            changes.append(
+                f"Neue {firmware_type} Version hinzugefügt: {version} "
+                f"(Größe: {format_size(new_versions[version]['fwsize'])})"
+            )
         elif old_versions[version]["fwsize"] != new_versions[version]["fwsize"]:
-            changes.append(f"{firmware_type} Version {version} geändert: Neue Größe {format_size(new_versions[version]['fwsize'])} (vorher: {format_size(old_versions[version]['fwsize'])})")
+            changes.append(
+                f"{firmware_type} Version {version} geändert: Neue Größe "
+                f"{format_size(new_versions[version]['fwsize'])} "
+                f"(vorher: {format_size(old_versions[version]['fwsize'])})"
+            )
 
     for version in old_versions:
         if version not in new_versions:
@@ -154,35 +169,52 @@ def compare_versions(old_data, new_data, firmware_type):
 
     return changes
 
+
+def process_device(device_name, device):
+    output = []
+    output.append(f"Überprüfe {device_name} ({device['model']}, CSC: {device['csc']})")
+
+    for firmware_type, url in device["urls"].items():
+        xml = fetch_xml(url)
+        if not xml:
+            output.append(f"Keine Daten für {firmware_type}-Firmware.")
+            continue
+
+        new_data = parse_xml(xml)
+        if not new_data:
+            output.append(f"Fehler beim Parsen der {firmware_type}-Firmware.")
+            continue
+
+        old_data = load_cached_data(device, firmware_type)
+        changes = compare_versions(old_data, new_data, firmware_type.capitalize())
+
+        if changes:
+            output.append(f"\nÄnderungen für {device_name} ({firmware_type}-Firmware):")
+            for c in changes:
+                output.append(f" - {c}")
+        else:
+            output.append(f"Keine Änderungen für {firmware_type}-Firmware.")
+
+        save_cached_data(device, firmware_type, new_data)
+
+    output.append("-" * 50)
+    return "\n".join(output)
+
+
 def main():
     print(f"Firmware-Tracking gestartet: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-    
-    for device_name, device in DEVICES.items():
-        print(f"Überprüfe {device_name} ({device['model']}, CSC: {device['csc']})")
-        
-        for firmware_type, url in device["urls"].items():
-            xml_content = fetch_xml(url)
-            if not xml_content:
-                print(f"Keine Daten für {firmware_type}-Firmware abgerufen.")
-                continue
-            
-            new_data = parse_xml(xml_content)
-            if not new_data:
-                print(f"Fehler beim Parsen der {firmware_type}-Firmware-Daten.")
-                continue
-            
-            old_data = load_cached_data(device, firmware_type)
-            changes = compare_versions(old_data, new_data, firmware_type.capitalize())
-            if changes:
-                print(f"\nÄnderungen für {device_name} ({firmware_type}-Firmware):")
-                for change in changes:
-                    print(f" - {change}")
-            else:
-                print(f"Keine Änderungen für {firmware_type}-Firmware.")
-            
-            save_cached_data(device, firmware_type, new_data)
-        
-        print("-" * 50)
+
+    results = []
+    with ProcessPoolExecutor() as executor:
+        futures = {executor.submit(process_device, name, dev): name for name, dev in DEVICES.items()}
+
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    # sortiert, damit die Ausgabe stabil bleibt
+    for r in results:
+        print(r)
+
 
 if __name__ == "__main__":
     main()
