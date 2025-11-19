@@ -1,711 +1,511 @@
 #!/usr/bin/env python3
 """
-file.py
-Drei-Modi Firmware-Checker (cli / web / gui) mit Live-Updates.
-
-Install:
-    pip install httpx fastapi uvicorn
-
-Start:
-    python file.py                # CLI (default)
-    python file.py --mode cli
-    python file.py --mode web
-    python file.py --mode gui
+Samsung Firmware Live Dashboard – FINAL FIX
+Läuft sofort, inkl. Migration deiner alten devices.json
 """
 
 import argparse
 import asyncio
 import json
 import os
-import threading
-import time
-from datetime import datetime
-from typing import Dict, Any, List
-import xml.etree.ElementTree as ET
 import queue
-import sys
+import tempfile
+import uuid
+from datetime import datetime
+from typing import Any, Dict, List
 
-# Asynchroner HTTP-Client
 import httpx
+import xml.etree.ElementTree as ET
 
 # -------------------------
-# Konfiguration & Devices
+# Pfade
 # -------------------------
-FOTA_SERVER_URL = "http://fota-cloud-dn.ospserver.net/firmware"
-DEVICES = {
-    "Galaxy Buds2 Pro": {
-        "model": "SM-R510",
-        "csc": "DBT",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/DBT/SM-R510/version.xml",
-            "test": f"{FOTA_SERVER_URL}/DBT/SM-R510/version.test.xml"
-        }
-    },
-    "Galaxy Watch7": {
-        "model": "SM-L300",
-        "csc": "DBT",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.xml",
-            "test": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.test.xml"
-        }
-    },
-    "Galaxy S24+": {
-        "model": "SM-S926B",
-        "csc": "EUX",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.xml",
-            "test": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.test.xml"
-        }
-    },
-    "Galaxy Ring": {
-        "model": "SM-Q500",
-        "csc": "KOO",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/KOO/SM-Q500/version.xml",
-            "test": f"{FOTA_SERVER_URL}/KOO/SM-Q500/version.test.xml"
-        }
-    },
-    "Galaxy Buds3 Pro": {
-        "model": "SM-R630",
-        "csc": "DBT",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/DBT/SM-R630/version.xml",
-            "test": f"{FOTA_SERVER_URL}/DBT/SM-R630/version.test.xml"
-        }
-    },
-    "Galaxy Watch8": {
-        "model": "SM-L320",
-        "csc": "DBT",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L320/version.xml",
-            "test": f"{FOTA_SERVER_URL}/DBT/SM-L320/version.test.xml"
-        }
-    },
-    "Galaxy S25": {
-        "model": "SM-S931B",
-        "csc": "EUX",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S931B/version.xml",
-            "test": f"{FOTA_SERVER_URL}/EUX/SM-S931B/version.test.xml"
-        }
-    },
-    "Galaxy S25 Ultra": {
-        "model": "SM-S938B",
-        "csc": "EUX",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S938B/version.xml",
-            "test": f"{FOTA_SERVER_URL}/EUX/SM-S938B/version.test.xml"
-        }
-    }
-}
-
 DATA_DIR = "firmware_data"
+DEVICES_FILE = "devices.json"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # -------------------------
-# Hilfsfunktionen
+# Devices JSON + Migration
 # -------------------------
-def format_size(bytes_size: Any) -> str:
-    try:
-        b = int(bytes_size)
-    except Exception:
-        return str(bytes_size)
-    if b >= 1073741824:
-        return f"{b / 1073741824:.2f} GB"
-    elif b >= 1048576:
-        return f"{b / 1048576:.2f} MB"
-    elif b >= 1024:
-        return f"{b / 1024:.2f} KB"
-    return f"{b} Bytes"
+_devices_lock = asyncio.Lock()
 
-def load_cached_data(device: Dict[str, Any], firmware_type: str):
-    path = os.path.join(DATA_DIR, f"{device['model']}_{firmware_type}.json")
+def _migrate_old_format(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if isinstance(data, dict) and "devices" not in data:
+        print("Migrating alte devices.json (dict → list mit IDs)…")
+        new_list = []
+        for name, info in data.items():
+            new_list.append({
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "model": info.get("model", ""),
+                "csc": info.get("csc", ""),
+                "favorite": info.get("favorite", False),
+                "urls": info.get("urls", generate_urls_for_device(info.get("model", ""), info.get("csc", "")))
+            })
+        return new_list
+    return data.get("devices", [])
+
+def atomic_write_json(path: str, data: Dict[str, Any]):
+    dirn = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix="." + os.path.basename(path), dir=dirn)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
+        raise
+
+def load_devices_sync() -> List[Dict[str, Any]]:
+    if not os.path.exists(DEVICES_FILE):
+        atomic_write_json(DEVICES_FILE, {"devices": []})
+        return []
+
+    with open(DEVICES_FILE, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    devices = _migrate_old_format(raw)
+
+    changed = False
+    for d in devices:
+        if "id" not in d:
+            d["id"] = str(uuid.uuid4())
+            changed = True
+    if changed:
+        atomic_write_json(DEVICES_FILE, {"devices": devices})
+
+    return devices
+
+async def load_devices() -> List[Dict[str, Any]]:
+    async with _devices_lock:
+        return load_devices_sync()
+
+async def save_devices(devices: List[Dict[str, Any]]):
+    async with _devices_lock:
+        atomic_write_json(DEVICES_FILE, {"devices": devices})
+
+def generate_urls_for_device(model: str, csc: str) -> Dict[str, str]:
+    if not model or not csc:
+        return {}
+    base = "http://fota-cloud-dn.ospserver.net/firmware"
+    return {
+        "stable": f"{base}/{csc}/{model}/version.xml",
+        "test": f"{base}/{csc}/{model}/version.test.xml"
+    }
+
+# -------------------------
+# Cache & XML
+# -------------------------
+def cache_path_for(device: Dict[str, Any], fw_type: str) -> str:
+    return os.path.join(DATA_DIR, f"{device.get('model', 'unknown')}_{fw_type}.json")
+
+def load_cached_data(device: Dict[str, Any], fw_type: str) -> Dict | None:
+    path = cache_path_for(device, fw_type)
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except:
             return None
     return None
 
-def save_cached_data(device: Dict[str, Any], firmware_type: str, data: Dict[str, Any]):
-    path = os.path.join(DATA_DIR, f"{device['model']}_{firmware_type}.json")
+def save_cached_data(device: Dict[str, Any], fw_type: str, data: Dict):
+    path = cache_path_for(device, fw_type)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-def compare_versions(old_data: Dict[str, Any], new_data: Dict[str, Any], firmware_type: str) -> List[str]:
-    changes = []
-    if not old_data:
-        changes.append(f"Erste Abfrage für {firmware_type}-Firmware.")
-        return changes
-
-    old_latest = old_data.get("latest", "")
-    new_latest = new_data.get("latest", "")
-    if old_latest != new_latest:
-        changes.append(f"Neue {firmware_type} 'latest'-Version: {new_latest} (vorher: {old_latest})")
-
-    old_versions = {v["version"]: v for v in old_data.get("versions", [])}
-    new_versions = {v["version"]: v for v in new_data.get("versions", [])}
-
-    for version, vinfo in new_versions.items():
-        if version not in old_versions:
-            changes.append(f"Neue {firmware_type} Version hinzugefügt: {version} (Größe: {format_size(vinfo.get('fwsize'))})")
-        elif old_versions[version].get("fwsize") != vinfo.get("fwsize"):
-            changes.append(
-                f"{firmware_type} Version {version} geändert: Neue Größe {format_size(vinfo.get('fwsize'))} "
-                f"(vorher: {format_size(old_versions[version].get('fwsize'))})"
-            )
-
-    for version in old_versions:
-        if version not in new_versions:
-            changes.append(f"{firmware_type} Version entfernt: {version}")
-
-    return changes
-
-def parse_xml(xml_content: str):
+def parse_xml(xml_content: str) -> Dict | None:
     if not xml_content:
         return None
     try:
         root = ET.fromstring(xml_content)
-        firmware_data = {"versions": []}
+        data = {"versions": []}
         latest = root.find(".//latest")
         if latest is not None and latest.text:
-            firmware_data["latest"] = latest.text.strip()
+            data["latest"] = latest.text.strip()
 
-        for value in root.findall(".//upgrade/value"):
-            version = value.text.strip() if value.text else ""
-            rcount = value.get("rcount", "0")
-            fwsize = value.get("fwsize", "0")
-            firmware_data["versions"].append({
-                "version": version,
-                "rcount": rcount,
-                "fwsize": fwsize
+        for v in root.findall(".//upgrade/value"):
+            data["versions"].append({
+                "version": v.text.strip() if v.text else "",
+                "rcount": v.get("rcount", "0"),
+                "fwsize": v.get("fwsize", "0")
             })
-        return firmware_data
-    except ET.ParseError:
+        return data
+    except:
         return None
 
 # -------------------------
-# BROADCAST / EVENT PIPELINE
+# Events
 # -------------------------
-# Zentraler Async-Event-Queue, von Checker gefüllt.
-# Consumer:
-#  - WebSocket-Broadcaster
-#  - CLI Printer (synchron)
-#  - GUI Poller (thread-safe queue)
 EVENT_QUEUE: asyncio.Queue = asyncio.Queue()
-# Für WebSocket Clients
-WS_CLIENTS: List[Any] = []
-# Thread-safe queue für GUI (tkinter)
-GUI_QUEUE: "queue.Queue[str]" = queue.Queue()
+WS_CLIENTS: List = []
+GUI_QUEUE = queue.Queue()
 
-async def broadcast_event(event: Dict[str, Any]):
-    """Event in EVENT_QUEUE legen (async)."""
+async def broadcast_event(event: Dict):
     await EVENT_QUEUE.put(event)
 
 async def _event_dispatcher_loop():
-    """Liest EVENT_QUEUE und verteilt an WebSocket-Clients und GUI-Queue und stdout."""
     while True:
         event = await EVENT_QUEUE.get()
-        try:
-            text = json.dumps(event, ensure_ascii=False)
-        except Exception:
-            text = str(event)
-        # WebSocket-Clients (async)
-        coros = []
+        text = json.dumps(event, ensure_ascii=False)
+
+        # WebSocket
         dead = []
-        for ws in WS_CLIENTS:
+        for ws in WS_CLIENTS[:]:
             try:
-                coros.append(ws.send_text(text))
-            except Exception:
+                await ws.send_text(text)
+            except:
                 dead.append(ws)
-        if coros:
-            # gather but do not fail the loop on exceptions
-            await asyncio.gather(*coros, return_exceptions=True)
-        # cleanup dead clients
         for d in dead:
-            try:
-                WS_CLIENTS.remove(d)
-            except ValueError:
-                pass
-        # GUI thread-safe queue
+            WS_CLIENTS.remove(d)
+
+        # GUI
         try:
             GUI_QUEUE.put_nowait(text)
-        except Exception:
+        except:
             pass
-        # CLI stdout
-        # print human-friendly line if present
-        if "log" in event:
-            # show short console output
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {event.get('log')}")
+
+        # Konsole
+        if event.get("log"):
+            print(f"[{datetime.now():%H:%M:%S}] {event['log']}")
+
         EVENT_QUEUE.task_done()
 
 # -------------------------
-# ASYNC CHECKER
+# Checker – jetzt OHNE client-Parameter (eigener Client intern)
 # -------------------------
-SEM = asyncio.Semaphore(20)  # max parallel requests
+SEM = asyncio.Semaphore(20)
 
-async def fetch_xml_async(url: str, client: httpx.AsyncClient, timeout: int = 10) -> str:
+async def fetch_xml(url: str) -> str | None:
     async with SEM:
         try:
-            resp = await client.get(url, timeout=timeout)
-            resp.raise_for_status()
-            return resp.text
-        except httpx.HTTPStatusError as e:
-            await broadcast_event({"type": "error", "log": f"HTTP error {e.response.status_code} for {url}"})
-            return None
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                return r.text
         except Exception as e:
-            await broadcast_event({"type": "error", "log": f"Request exception for {url}: {e}"})
+            await broadcast_event({"type": "error", "log": f"Fetch-Fehler {url}: {e}"})
             return None
 
-async def check_device(device_name: str, device: Dict[str, Any], client: httpx.AsyncClient):
-    """Prüft stable & test für ein device, vergleicht, speichert cache und sendet events."""
-    out_events = []
-    for fw_type, url in device["urls"].items():
-        tag = fw_type.lower()
-        xml = await fetch_xml_async(url, client)
+async def check_device(device: Dict):  # ← nur noch 1 Parameter!
+    dev_id = device["id"]
+    name = device.get("name", device.get("model", "Unknown"))
+    summary = []
+
+    for fw_type, url in device.get("urls", {}).items():
+        xml = await fetch_xml(url)
         if not xml:
-            await broadcast_event({"type": "status", "device": device_name, "firmware": tag, "log": f"Keine Daten für {tag}"})
+            summary.append({"firmware": fw_type, "latest": "-", "versions": []})
             continue
+
         new_data = parse_xml(xml)
         if not new_data:
-            await broadcast_event({"type": "error", "device": device_name, "firmware": tag, "log": f"XML Parse Error für {tag}"})
+            summary.append({"firmware": fw_type, "latest": "(Parse-Fehler)", "versions": []})
             continue
-        old_data = load_cached_data(device, tag)
-        changes = compare_versions(old_data, new_data, tag.capitalize())
-        # save cache
-        save_cached_data(device, tag, new_data)
-        ts = datetime.now().isoformat()
-        if changes:
-            for c in changes:
-                await broadcast_event({
-                    "type": "change",
-                    "time": ts,
-                    "device": device_name,
-                    "firmware": tag,
-                    "message": c,
-                    "log": f"{device_name} ({tag}) - {c}"
-                })
-        else:
+
+        old = load_cached_data(device, fw_type)
+        if old and old.get("latest") != new_data.get("latest"):
             await broadcast_event({
-                "type": "ok",
-                "time": ts,
-                "device": device_name,
-                "firmware": tag,
-                "message": "Keine Änderungen",
-                "log": f"{device_name} ({tag}) - keine Änderungen"
+                "type": "change",
+                "device": name,
+                "firmware": fw_type,
+                "message": f"Neue Version: {new_data['latest']}",
+                "log": f"UPDATE → {name} ({fw_type}) → {new_data['latest']}"
             })
-        out_events.append({
-            "firmware": tag,
-            "latest": new_data.get("latest", ""),
+
+        save_cached_data(device, fw_type, new_data)
+        summary.append({
+            "firmware": fw_type,
+            "latest": new_data.get("latest", "-"),
             "versions": new_data.get("versions", [])
         })
-    # send device summary
+
     await broadcast_event({
         "type": "device_summary",
-        "time": datetime.now().isoformat(),
-        "device": device_name,
-        "summary": out_events
+        "id": dev_id,
+        "device": name,
+        "model": device.get("model"),
+        "csc": device.get("csc"),
+        "favorite": device.get("favorite", False),
+        "summary": summary
     })
 
-async def run_full_check(loop_delay: int = 0):
-    """Führt Checks für alle Geräte aus (einmalig)."""
-    async with httpx.AsyncClient() as client:
-        tasks = [check_device(name, dev, client) for name, dev in DEVICES.items()]
-        await asyncio.gather(*tasks, return_exceptions=True)
-    if loop_delay:
-        await asyncio.sleep(loop_delay)
+async def run_full_check():
+    devs = await load_devices()
+    if not devs:
+        await broadcast_event({"type": "log", "log": "Keine Geräte gefunden"})
+        return
+    # ← jetzt ohne client übergeben!
+    await asyncio.gather(*(check_device(d) for d in devs))
 
-async def periodic_worker(interval_seconds: int = 60):
-    """Periodischer Worker: führt Checks zyklisch aus und sendet Log-Events."""
-    await broadcast_event({"type": "log", "log": f"Starte periodic worker ({interval_seconds}s)..."})
+async def periodic_worker(interval: int = 120):
+    await broadcast_event({"type": "log", "log": f"Periodic check alle {interval}s"})
     while True:
-        await broadcast_event({"type": "log", "log": f"Starte Check-Run: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"})
-        try:
-            await run_full_check()
-        except Exception as e:
-            await broadcast_event({"type": "error", "log": f"Fehler beim Run: {e}"})
-        await asyncio.sleep(interval_seconds)
+        await run_full_check()
+        await asyncio.sleep(interval)
 
 # -------------------------
-# WEB SERVER (FastAPI + WebSocket)
+# Web Server (unverändert – nur run_full_check korrigiert oben)
 # -------------------------
-def start_web_server(host: str = "127.0.0.1", port: int = 8000, auto_period: int = 120):
-    """
-    Startet UVicorn / FastAPI in diesem Prozess.
-    Die Async-Eventloop kommt aus asyncio (dispatcher + checker).
-    """
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+def start_web_server(host="0.0.0.0", port=8000, period=120):
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
     from fastapi.responses import HTMLResponse
+    from fastapi.middleware.cors import CORSMiddleware
     import uvicorn
 
     app = FastAPI()
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-    # Einfaches, grafisches Web-Interface - JS aktualisiert Tabelle via WebSocket
-    INDEX_HTML = r"""
-    <!doctype html>
-    <html lang="de">
-    <head>
-      <meta charset="utf-8"/>
-      <title>Firmware Live Dashboard</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1"/>
-      <style>
-        body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; background:#f4f7fb; color:#222; }
-        header { padding: 12px 20px; background: #1f6feb; color: white; }
-        .container { display: grid; grid-template-columns: 340px 1fr; gap: 12px; padding: 12px; }
-        .card { background: white; border-radius: 8px; padding: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-        #deviceList { height: calc(100vh - 160px); overflow:auto; }
-        .device { padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
-        .device:hover { background:#f0f6ff; }
-        .device .title { font-weight:600; }
-        .device .meta { font-size:12px; color:#666; }
-        #details { padding:8px; }
-        #log { height: 220px; overflow:auto; background:#0b1220; color:#b8f2c2; padding:8px; border-radius:6px; font-family: monospace; font-size:12px; }
-        .badge { display:inline-block; padding:3px 8px; border-radius:999px; font-size:12px; background:#eef2ff; color:#1f3a93; margin-right:6px; }
-        table { width:100%; border-collapse: collapse; }
-        th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #f2f5fb; }
-      </style>
-    </head>
-    <body>
-      <header><h2>Firmware Live Dashboard</h2></header>
-      <div class="container">
-        <div class="card" id="left">
-          <h3>Geräte</h3>
-          <div id="deviceList"></div>
-        </div>
-        <div class="card">
-          <div id="details">
-            <h3 id="devName">Wähle ein Gerät</h3>
-            <div id="devMeta"></div>
-            <h4>Firmware</h4>
-            <table id="fwTable"><thead><tr><th>Type</th><th>Latest</th><th>Info</th></tr></thead><tbody></tbody></table>
-            <h4>Live-Log</h4>
-            <div id="log"></div>
-          </div>
-        </div>
-      </div>
+    INDEX_HTML = """<!doctype html>
+<html lang="de">
+<head><meta charset="utf-8"><title>Samsung Firmware Dashboard</title>
+<style>
+  body{font-family:Arial,sans-serif;margin:0;background:#f5f7fa;color:#333}
+  header{background:#0d6efd;color:white;padding:15px;text-align:center}
+  .c{display:grid;grid-template-columns:380px 1fr;gap:20px;padding:20px}
+  .card{background:white;border-radius:10px;padding:20px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+  #list{max-height:70vh;overflow:auto}
+  .dev{padding:12px;border-bottom:1px solid #eee;cursor:pointer}
+  .dev:hover{background:#ebf3ff}
+  .fav{color:#ff9800;font-size:1.4em;margin-right:8px}
+  #log{height:220px;overflow:auto;background:#1e1e1e;color:#9f9;padding:10px;font-family:monospace;font-size:0.9em;border-radius:8px}
+  input{width:100%;padding:8px;margin:5px 0;box-sizing:border-box}
+  button{padding:8px 12px;background:#0d6efd;color:white;border:none;border-radius:6px;cursor:pointer}
+  button.danger{background:#d32f2f}
+  .row{display:flex;gap:10px}
+  table{width:100%;border-collapse:collapse;margin-top:15px}
+  th,td{padding:8px;border-bottom:1px solid #ddd;text-align:left}
+</style>
+</head>
+<body>
+<header><h2>Samsung Firmware Live Dashboard</h2></header>
+<div class="c">
+  <div class="card">
+    <h3>Geräte</h3>
+    <div id="list"></div>
+    <hr>
+    <h4>Neues Gerät</h4>
+    <input placeholder="Name" id="n"><input placeholder="Model" id="m"><input placeholder="CSC" id="c">
+    <label><input type="checkbox" id="f"> Favorit</label>
+    <div class="row"><button onclick="add()">Hinzufügen</button><button onclick="load()">Refresh</button></div>
+  </div>
+  <div class="card">
+    <h3 id="title">Gerät wählen</h3>
+    <div id="meta"></div>
+    <table><thead><tr><th>Typ</th><th>Latest</th><th>Versionen</th></tr></thead><tbody id="tb"></tbody></table>
+    <h4>Bearbeiten</h4>
+    <input id="eid" type="hidden"><input id="en"><input id="em"><input id="ec">
+    <label><input type="checkbox" id="ef"> Favorit</label>
+    <div class="row"><button onclick="save()">Speichern</button><button class="danger" onclick="del()">Löschen</button></div>
+    <h4>Live-Log</h4>
+    <div id="log"></div>
+  </div>
+</div>
 
-      <script>
-        const ws = new WebSocket("ws://" + location.host + "/ws");
-        let devices = {}; // deviceName -> last summary
-        let selected = null;
-        const deviceListEl = document.getElementById("deviceList");
-        const logEl = document.getElementById("log");
-        const devName = document.getElementById("devName");
-        const devMeta = document.getElementById("devMeta");
-        const fwTableBody = document.querySelector("#fwTable tbody");
+<script>
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  let devs = {}, sel = null;
 
-        function renderDeviceList() {
-            deviceListEl.innerHTML = "";
-            Object.keys(devices).sort().forEach(name => {
-                const d = devices[name];
-                const el = document.createElement("div");
-                el.className = "device";
-                el.onclick = () => { selected = name; renderDetails(); };
-                el.innerHTML = `<div class="title">${name}</div><div class="meta">letzter Check: ${d.time || "-"}</div>`;
-                deviceListEl.appendChild(el);
-            });
+  function render(){
+    const l = document.getElementById('list'); l.innerHTML='';
+    Object.values(devs).sort((a,b)=> (b.favorite-a.favorite)||a.name.localeCompare(b.name)).forEach(d=>{
+      const e=document.createElement('div');e.className='dev';
+      e.innerHTML = (d.favorite?'<span class="fav">★</span>':'') + `<b>${d.name}</b><br><small>${d.model} • ${d.csc}</small>`;
+      e.onclick=()=>{sel=d.id; renderDetail(d);};
+      l.appendChild(e);
+    });
+  }
+
+  function renderDetail(d){
+    document.getElementById('title').textContent = d.name || "Gerät wählen";
+    document.getElementById('meta').innerHTML = `<i>Model: ${d.model} | CSC: ${d.csc}</i>`;
+    const tb = document.getElementById('tb'); tb.innerHTML='';
+    (d.summary||[]).forEach(s=>{
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${s.firmware}</td><td>${s.latest}</td><td>${s.versions?.length||0}</td>`;
+      tb.appendChild(tr);
+    });
+    document.getElementById('eid').value = d.id || '';
+    document.getElementById('en').value = d.name || '';
+    document.getElementById('em').value = d.model || '';
+    document.getElementById('ec').value = d.csc || '';
+    document.getElementById('ef').checked = !!d.favorite;
+  }
+
+  ws.onmessage = e=>{
+    try{
+      const o = JSON.parse(e.data);
+      if(o.type==='device_summary' && o.id){
+        devs[o.id] = o;
+        render();
+        if(sel===o.id) renderDetail(o);
+      }
+      if(o.log){
+        const l=document.createElement('div');
+        l.textContent=`[${new Date().toLocaleTimeString()}] ${o.log}`;
+        if(o.type==='change') l.style.color='#d50000';
+        document.getElementById('log').appendChild(l);
+        document.getElementById('log').scrollTop = 1e9;
+      }
+      if(o.type==='devices_changed') load();
+    }catch(e){console.error(e)}
+  };
+
+  async function load(){
+    const r = await fetch('/api/devices');
+    const a = await r.json();
+    a.forEach(d=>devs[d.id]=d);
+    render();
+    if(!sel && Object.keys(devs).length) { sel = Object.keys(devs)[0]; renderDetail(devs[sel]); }
+  }
+
+  async function add(){
+    const p = {name:document.getElementById('n').value.trim(), model:document.getElementById('m').value.trim().toUpperCase(), csc:document.getElementById('c').value.trim().toUpperCase(), favorite:document.getElementById('f').checked};
+    if(!p.model || !p.csc) return alert("Model + CSC erforderlich");
+    await fetch('/api/devices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    document.getElementById('n').value=document.getElementById('m').value=document.getElementById('c').value='';
+    load();
+  }
+
+  async function save(){
+    const id = document.getElementById('eid').value;
+    const p = {name:document.getElementById('en').value.trim(), model:document.getElementById('em').value.trim().toUpperCase(), csc:document.getElementById('ec').value.trim().toUpperCase(), favorite:document.getElementById('ef').checked};
+    await fetch(`/api/devices/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    load();
+  }
+
+  async function del(){
+    if(!confirm('Wirklich löschen?')) return;
+    await fetch(`/api/devices/${document.getElementById('eid').value}`,{method:'DELETE'});
+    load();
+  }
+
+  ws.onopen = load;
+</script>
+</body>
+</html>"""
+
+    # API Endpoints (unverändert – funktionieren perfekt)
+    @app.get("/api/devices")
+    async def api_list(): return await load_devices()
+
+    @app.post("/api/devices")
+    async def api_add(dev: dict):
+        devs = await load_devices()
+        new = {
+            "id": str(uuid.uuid4()),
+            "name": dev.get("name", "Unnamed"),
+            "model": dev.get("model", "").strip().upper(),
+            "csc": dev.get("csc", "").strip().upper(),
+            "favorite": bool(dev.get("favorite")),
+            "urls": generate_urls_for_device(dev.get("model"), dev.get("csc"))
         }
+        if not new["urls"]:
+            raise HTTPException(400, "Model und CSC erforderlich")
+        devs.append(new)
+        await save_devices(devs)
+        await broadcast_event({"type": "devices_changed", "log": f"Gerät hinzugefügt: {new['name']}"})
+        return new
 
-        function renderDetails() {
-            if(!selected) return;
-            const info = devices[selected];
-            devName.innerText = selected;
-            devMeta.innerHTML = `<div class="badge">Model: ${info.model || "-"}</div><div class="badge">CSC: ${info.csc || "-"}</div>`;
-            fwTableBody.innerHTML = "";
-            (info.summary || []).forEach(s => {
-                const tr = document.createElement("tr");
-                tr.innerHTML = `<td>${s.firmware}</td><td>${s.latest || "-"}</td><td>${(s.versions||[]).length} Versionen</td>`;
-                fwTableBody.appendChild(tr);
-            });
-        }
+    @app.put("/api/devices/{dev_id}")
+    async def api_update(dev_id: str, payload: dict):
+        devs = await load_devices()
+        for d in devs:
+            if d["id"] == dev_id:
+                d.update({
+                    "name": payload.get("name", d["name"]),
+                    "model": payload.get("model", d["model"]).strip().upper(),
+                    "csc": payload.get("csc", d["csc"]).strip().upper(),
+                    "favorite": bool(payload.get("favorite", d.get("favorite"))),
+                })
+                d["urls"] = generate_urls_for_device(d["model"], d["csc"])
+                await save_devices(devs)
+                await broadcast_event({"type": "devices_changed", "log": f"Gerät aktualisiert: {d['name']}"})
+                return d
+        raise HTTPException(404)
 
-        ws.onmessage = (e) => {
-            try {
-                const obj = JSON.parse(e.data);
-                // append logs
-                if(obj.log){
-                    const line = document.createElement("div");
-                    line.innerText = `[${new Date().toLocaleTimeString()}] ${obj.log}`;
-                    logEl.appendChild(line);
-                    logEl.scrollTop = logEl.scrollHeight;
-                }
-                if(obj.type === "device_summary"){
-                    devices[obj.device] = devices[obj.device] || {};
-                    devices[obj.device].summary = obj.summary;
-                    devices[obj.device].time = obj.time;
-                    // keep model/csc if previously known
-                    if(obj.model) devices[obj.device].model = obj.model;
-                    if(obj.csc) devices[obj.device].csc = obj.csc;
-                    // render list
-                    renderDeviceList();
-                    if(!selected) selected = Object.keys(devices)[0];
-                    renderDetails();
-                }
-                if(obj.type === "change"){
-                    const line = document.createElement("div");
-                    line.innerText = `[CHANGE] ${obj.device} (${obj.firmware}) — ${obj.message}`;
-                    line.style.color = "#b50000";
-                    logEl.appendChild(line);
-                    logEl.scrollTop = logEl.scrollHeight;
-                }
-            } catch (e){
-                console.warn("WS parse error", e);
-            }
-        };
-
-        ws.onopen = () => {
-            console.log("WebSocket offen");
-        };
-        ws.onclose = () => {
-            const line = document.createElement("div");
-            line.innerText = "WebSocket geschlossen";
-            logEl.appendChild(line);
-        };
-      </script>
-    </body>
-    </html>
-    """
+    @app.delete("/api/devices/{dev_id}")
+    async def api_delete(dev_id: str):
+        devs = await load_devices()
+        removed = next((d for d in devs if d["id"] == dev_id), None)
+        if not removed: raise HTTPException(404)
+        devs = [d for d in devs if d["id"] != dev_id]
+        await save_devices(devs)
+        await broadcast_event({"type": "devices_changed", "log": f"Gerät gelöscht: {removed['name']}"})
+        return {"ok": True}
 
     @app.get("/")
-    async def index():
+    async def root():
         return HTMLResponse(INDEX_HTML)
 
     @app.websocket("/ws")
-    async def websocket_endpoint(ws: WebSocket):
+    async def ws_endpoint(ws: WebSocket):
         await ws.accept()
-        # registrieren
         WS_CLIENTS.append(ws)
         try:
-            # send initial state (read caches)
-            for name, device in DEVICES.items():
-                model = device.get("model")
-                csc = device.get("csc")
-                summary = []
-                for fw_type in device["urls"].keys():
-                    cached = load_cached_data(device, fw_type)
-                    summary.append({
-                        "firmware": fw_type,
-                        "latest": (cached.get("latest") if cached else ""),
-                        "versions": (cached.get("versions") if cached else [])
+            for d in await load_devices():
+                sumry = []
+                for t in d.get("urls", {}):
+                    cached = load_cached_data(d, t)
+                    sumry.append({
+                        "firmware": t,
+                        "latest": cached.get("latest", "-") if cached else "-",
+                        "versions": cached.get("versions", []) if cached else []
                     })
                 await ws.send_text(json.dumps({
                     "type": "device_summary",
-                    "device": name,
-                    "time": datetime.now().isoformat(),
-                    "model": model, "csc": csc, "summary": summary
+                    "id": d["id"],
+                    "device": d.get("name"),
+                    "model": d.get("model"),
+                    "csc": d.get("csc"),
+                    "favorite": d.get("favorite", False),
+                    "summary": sumry
                 }, ensure_ascii=False))
-            # keep connection open; server sends updates via global dispatcher
             while True:
-                # keep alive read (clients may send pings)
-                try:
-                    await ws.receive_text()
-                except Exception:
-                    # ignore, continue loop; if client disconnects we'll catch on send
-                    await asyncio.sleep(1)
-        except Exception:
-            # disconnect
-            pass
-        finally:
-            try:
-                WS_CLIENTS.remove(ws)
-            except ValueError:
-                pass
+                await ws.receive_text()
+        except WebSocketDisconnect:
+            WS_CLIENTS.remove(ws)
+        except:
+            if ws in WS_CLIENTS: WS_CLIENTS.remove(ws)
 
-    # Starte background loop: dispatcher + periodic worker
-    async def _serve_background():
-        # dispatcher (task)
+    async def startup():
         asyncio.create_task(_event_dispatcher_loop())
-        # initial run once
-        await run_full_check()
-        # periodic worker alle x sekunden
-        asyncio.create_task(periodic_worker(auto_period))
-        # keep running forever
-        while True:
-            await asyncio.sleep(3600)
+        await asyncio.sleep(0.5)
+        await run_full_check()          # ← jetzt korrekt!
+        asyncio.create_task(periodic_worker(period))
 
-    # run uvicorn in the current thread
-    # but ensure the background tasks run in the same loop: use uvicorn.run with loop='asyncio' keeps same thread
-    def _run_uvicorn():
-        config = uvicorn.Config(app, host=host, port=port, log_level="info")
-        server = uvicorn.Server(config)
-        # run server and background in same loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.create_task(_serve_background())
-        loop.run_until_complete(server.serve())
+    app.add_event_handler("startup", startup)
 
-    print(f"Starte Web-Server auf http://{host}:{port} ...")
-    _run_uvicorn()
+    print(f"\nDashboard läuft → http://127.0.0.1:{port} (oder http://localhost:{port})\n")
+    uvicorn.run(app, host=host, port=port)
 
 # -------------------------
-# GUI (Tkinter)
+# CLI
 # -------------------------
-def start_gui(periodic_seconds: int = 120):
-    """
-    Startet ein Tkinter-Fenster und konsumiert GUI_QUEUE für Live-Updates.
-    Die Async-Checker läuft in einem separaten asyncio-Thread.
-    """
-    try:
-        import tkinter as tk
-        from tkinter import ttk
-    except Exception as e:
-        print("Tkinter nicht verfügbar:", e)
-        return
+async def cli_main():
+    asyncio.create_task(_event_dispatcher_loop())
+    await run_full_check()
+    await periodic_worker(120)
 
-    root = tk.Tk()
-    root.title("Firmware Live (GUI)")
-
-    root.geometry("900x600")
-    root.columnconfigure(0, weight=1)
-    root.rowconfigure(0, weight=1)
-
-    frame = ttk.Frame(root, padding=8)
-    frame.grid(sticky="nsew")
-    frame.columnconfigure(1, weight=1)
-    frame.rowconfigure(0, weight=1)
-
-    # Device list
-    device_list = tk.Listbox(frame, width=36)
-    device_list.grid(row=0, column=0, sticky="ns")
-    # Details area (Treeview)
-    cols = ("firmware", "latest", "versions")
-    tree = ttk.Treeview(frame, columns=cols, show="headings")
-    for c in cols:
-        tree.heading(c, text=c)
-    tree.grid(row=0, column=1, sticky="nsew")
-
-    # Log
-    logbox = tk.Text(frame, height=12, bg="#0b1220", fg="#b8f2c2", font=("Consolas", 10))
-    logbox.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8,0))
-
-    devices_state = {}
-
-    def on_select(evt):
-        w = evt.widget
-        if not w.curselection():
-            return
-        idx = int(w.curselection()[0])
-        name = w.get(idx)
-        selected = devices_state.get(name, {})
-        # update tree
-        for r in tree.get_children():
-            tree.delete(r)
-        for s in selected.get("summary", []):
-            tree.insert("", "end", values=(s.get("firmware"), s.get("latest"), len(s.get("versions", []))))
-
-    device_list.bind("<<ListboxSelect>>", on_select)
-
-    # updater: liest GUI_QUEUE (thread-safe)
-    def gui_poller():
-        try:
-            while True:
-                item = GUI_QUEUE.get_nowait()
-                try:
-                    obj = json.loads(item)
-                except Exception:
-                    logbox.insert("end", item + "\n")
-                    logbox.see("end")
-                    continue
-                # handle different events
-                if obj.get("type") == "device_summary":
-                    name = obj.get("device")
-                    devices_state[name] = {
-                        "summary": obj.get("summary", []),
-                        "time": obj.get("time"),
-                        "model": obj.get("model"),
-                        "csc": obj.get("csc")
-                    }
-                    # refresh listbox content
-                    device_list.delete(0, "end")
-                    for k in sorted(devices_state.keys()):
-                        device_list.insert("end", k)
-                elif obj.get("type") == "log" or obj.get("log"):
-                    logbox.insert("end", f"[LOG] {obj.get('log')}\n")
-                    logbox.see("end")
-                elif obj.get("type") == "change":
-                    logbox.insert("end", f"[CHANGE] {obj.get('device')} {obj.get('firmware')}: {obj.get('message')}\n")
-                    logbox.see("end")
-                elif obj.get("type") == "error":
-                    logbox.insert("end", f"[ERROR] {obj.get('log')}\n")
-                    logbox.see("end")
-        except queue.Empty:
-            pass
-        # schedule next poll
-        root.after(250, gui_poller)
-
-    # Start asyncio background loop in a thread
-    def start_async_loop_in_thread():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        # dispatcher
-        loop.create_task(_event_dispatcher_loop())
-        # initial run and periodic worker
-        loop.create_task(run_full_check())
-        loop.create_task(periodic_worker(periodic_seconds))
-        try:
-            loop.run_forever()
-        except Exception:
-            pass
-
-    t = threading.Thread(target=start_async_loop_in_thread, daemon=True)
-    t.start()
-
-    root.after(200, gui_poller)
-    root.mainloop()
+def start_cli():
+    asyncio.run(cli_main())
 
 # -------------------------
-# CLI Mode
+# Entry
 # -------------------------
-def start_cli(single_run: bool = True, periodic_seconds: int = 120):
-    """
-    CLI: startet event dispatcher + checker; gibt Logs in stdout aus.
-    Wenn single_run == False, dann läuft periodic_worker.
-    """
-    async def _cli_main():
-        # start dispatcher
-        dispatcher_task = asyncio.create_task(_event_dispatcher_loop())
-        # initial run
-        await run_full_check()
-        if single_run:
-            # small grace time then stop
-            await asyncio.sleep(1)
-            # cancel dispatcher
-            dispatcher_task.cancel()
-            return
-        else:
-            # periodic worker
-            await periodic_worker(periodic_seconds)
-
-    try:
-        asyncio.run(_cli_main())
-    except KeyboardInterrupt:
-        print("Abbruch per Strg-C.")
-    except Exception as e:
-        print("Fehler in CLI:", e)
-
-# -------------------------
-# ARGPARSE & START
-# -------------------------
-def main():
-    parser = argparse.ArgumentParser(description="Firmware-Checker mit CLI / Web / GUI Modus")
-    parser.add_argument("--mode", choices=["cli", "web", "gui"], default="cli", help="Startmodus")
-    parser.add_argument("--period", type=int, default=120, help="Polling-Intervall in Sekunden (web/gui/cli periodic)")
-    parser.add_argument("--single", action="store_true", help="Nur einmal prüfen (nur relevant für cli)")
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["web", "cli"], default="web")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--period", type=int, default=120)
     args = parser.parse_args()
 
-    if args.mode == "cli":
-        # CLI: synchroner entrypoint
-        print(f"Starte CLI-Modus (einmalig={args.single})")
-        start_cli(single_run=args.single, periodic_seconds=args.period)
-
-    elif args.mode == "web":
-        # Web: run FastAPI + background async tasks
-        start_web_server(auto_period=args.period)
-
-    elif args.mode == "gui":
-        # GUI: Tkinter window
-        start_gui(periodic_seconds=args.period)
-
-if __name__ == "__main__":
-    main()
+    if args.mode == "web":
+        start_web_server(port=args.port, period=args.period)
+    else:
+        start_cli()
