@@ -1,9 +1,9 @@
 import xml.etree.ElementTree as ET
 from datetime import datetime
-import requests
+import httpx
 import json
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import asyncio
 
 FOTA_SERVER_URL = "http://fota-cloud-dn.ospserver.net/firmware"
 DEVICES = {
@@ -88,11 +88,11 @@ def format_size(bytes_size):
     return f"{bytes_size} Bytes"
 
 
-def fetch_xml(url):
+async def fetch_xml(url, client):
     try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        return r.text
+        resp = await client.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.text
     except Exception:
         return None
 
@@ -144,6 +144,7 @@ def compare_versions(old_data, new_data, firmware_type):
 
     old_latest = old_data.get("latest", "")
     new_latest = new_data.get("latest", "")
+
     if old_latest != new_latest:
         changes.append(f"Neue {firmware_type} 'latest'-Version: {new_latest} (vorher: {old_latest})")
 
@@ -170,12 +171,13 @@ def compare_versions(old_data, new_data, firmware_type):
     return changes
 
 
-def process_device(device_name, device):
+async def process_device(device_name, device, client):
     output = []
     output.append(f"Überprüfe {device_name} ({device['model']}, CSC: {device['csc']})")
 
     for firmware_type, url in device["urls"].items():
-        xml = fetch_xml(url)
+        xml = await fetch_xml(url, client)
+
         if not xml:
             output.append(f"Keine Daten für {firmware_type}-Firmware.")
             continue
@@ -201,20 +203,20 @@ def process_device(device_name, device):
     return "\n".join(output)
 
 
-def main():
+async def main():
     print(f"Firmware-Tracking gestartet: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
-    results = []
-    with ProcessPoolExecutor() as executor:
-        futures = {executor.submit(process_device, name, dev): name for name, dev in DEVICES.items()}
+    async with httpx.AsyncClient() as client:
+        tasks = [
+            process_device(name, device, client)
+            for name, device in DEVICES.items()
+        ]
 
-        for future in as_completed(futures):
-            results.append(future.result())
+        results = await asyncio.gather(*tasks)
 
-    # sortiert, damit die Ausgabe stabil bleibt
-    for r in results:
-        print(r)
+        for r in results:
+            print(r)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
