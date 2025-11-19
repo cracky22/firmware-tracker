@@ -6,12 +6,20 @@ import os
 
 FOTA_SERVER_URL = "http://fota-cloud-dn.ospserver.net/firmware"
 DEVICES = {
-    "Galaxy Watch7": {
-        "model": "SM-L310",
+    "Galaxy Buds2 Pro": {
+        "model": "SM-R510",
         "csc": "DBT",
         "urls": {
-            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L310/version.xml",
-            "test": f"{FOTA_SERVER_URL}/DBT/SM-L310/version.test.xml"
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-R510/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-R510/version.test.xml"
+        }
+    },
+    "Galaxy Watch7": {
+        "model": "SM-L300",
+        "csc": "DBT",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.test.xml"
         }
     },
     "Galaxy S24+": {
@@ -20,6 +28,22 @@ DEVICES = {
         "urls": {
             "stable": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.xml",
             "test": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.test.xml"
+        }
+    },
+    "Galaxy Ring": {
+        "model": "SM-Q500",
+        "csc": "KOO",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/KOO/SM-Q500/version.xml",
+            "test": f"{FOTA_SERVER_URL}/KOO/SM-Q500/version.test.xml"
+        }
+    },
+    "Galaxy Buds3 Pro": {
+        "model": "SM-R630",
+        "csc": "DBT",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-R630/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-R630/version.test.xml"
         }
     },
     "Galaxy Watch8": {
@@ -36,6 +60,14 @@ DEVICES = {
         "urls": {
             "stable": f"{FOTA_SERVER_URL}/EUX/SM-S931B/version.xml",
             "test": f"{FOTA_SERVER_URL}/EUX/SM-S931B/version.test.xml"
+        }
+    },
+    "Galaxy S25 Ultra": {
+        "model": "SM-S938B",
+        "csc": "EUX",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S938B/version.xml",
+            "test": f"{FOTA_SERVER_URL}/EUX/SM-S938B/version.test.xml"
         }
     }
 }
