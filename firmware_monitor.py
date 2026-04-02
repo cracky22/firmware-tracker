@@ -15,38 +15,6 @@ DEVICES = {
             "test": f"{FOTA_SERVER_URL}/DBT/SM-R510/version.test.xml"
         }
     },
-    "Galaxy Watch7": {
-        "model": "SM-L300",
-        "csc": "DBT",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.xml",
-            "test": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.test.xml"
-        }
-    },
-    "Galaxy Watch7 Korea": {
-        "model": "SM-L300",
-        "csc": "KOO",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.xml",
-            "test": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.test.xml"
-        }
-    },
-    "Galaxy S24+": {
-        "model": "SM-S926B",
-        "csc": "EUX",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.xml",
-            "test": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.test.xml"
-        }
-    },
-    "Galaxy Ring": {
-        "model": "SM-Q500",
-        "csc": "KOO",
-        "urls": {
-            "stable": f"{FOTA_SERVER_URL}/KOO/SM-Q500/version.xml",
-            "test": f"{FOTA_SERVER_URL}/KOO/SM-Q500/version.test.xml"
-        }
-    },
     "Galaxy Buds3 Pro": {
         "model": "SM-R630",
         "csc": "DBT",
@@ -63,6 +31,30 @@ DEVICES = {
             "test": f"{FOTA_SERVER_URL}/DBT/SM-R640/version.test.xml"
         }
     },
+    "Galaxy Ring": {
+        "model": "SM-Q500",
+        "csc": "KOO",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/KOO/SM-Q500/version.xml",
+            "test": f"{FOTA_SERVER_URL}/KOO/SM-Q500/version.test.xml"
+        }
+    },
+    "Galaxy Watch7": {
+        "model": "SM-L300",
+        "csc": "DBT",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.test.xml"
+        }
+    },
+    "Galaxy Watch7 Korea": {
+        "model": "SM-L300",
+        "csc": "KOO",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.test.xml"
+        }
+    },
     "Galaxy Watch8": {
         "model": "SM-L320",
         "csc": "DBT",
@@ -71,12 +63,28 @@ DEVICES = {
             "test": f"{FOTA_SERVER_URL}/DBT/SM-L320/version.test.xml"
         }
     },
-    "Galaxy S25": {
-        "model": "SM-S931B",
+    "Galaxy S22": {
+        "model": "SM-S901B",
         "csc": "EUX",
         "urls": {
-            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S931B/version.xml",
-            "test": f"{FOTA_SERVER_URL}/EUX/SM-S931B/version.test.xml"
+            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S901B/version.xml",
+            "test": f"{FOTA_SERVER_URL}/EUX/SM-S901B/version.test.xml"
+        }
+    },
+    "Galaxy S23": {
+        "model": "SM-S911B",
+        "csc": "EUX",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S911B/version.xml",
+            "test": f"{FOTA_SERVER_URL}/EUX/SM-S911B/version.test.xml"
+        }
+    },
+    "Galaxy S24+": {
+        "model": "SM-S926B",
+        "csc": "EUX",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.xml",
+            "test": f"{FOTA_SERVER_URL}/EUX/SM-S926B/version.test.xml"
         }
     },
     "Galaxy S25 Ultra": {
