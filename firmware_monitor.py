@@ -23,6 +23,14 @@ DEVICES = {
             "test": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.test.xml"
         }
     },
+    "Galaxy Watch7 Korea": {
+        "model": "SM-L300",
+        "csc": "KOO",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-L300/version.test.xml"
+        }
+    },
     "Galaxy S24+": {
         "model": "SM-S926B",
         "csc": "EUX",
@@ -45,6 +53,14 @@ DEVICES = {
         "urls": {
             "stable": f"{FOTA_SERVER_URL}/DBT/SM-R630/version.xml",
             "test": f"{FOTA_SERVER_URL}/DBT/SM-R630/version.test.xml"
+        }
+    },
+    "Galaxy Buds4 Pro": {
+        "model": "SM-R640",
+        "csc": "DBT",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/DBT/SM-R640/version.xml",
+            "test": f"{FOTA_SERVER_URL}/DBT/SM-R640/version.test.xml"
         }
     },
     "Galaxy Watch8": {
