@@ -86,6 +86,14 @@ DEVICES = {
             "stable": f"{FOTA_SERVER_URL}/EUX/SM-S938B/version.xml",
             "test": f"{FOTA_SERVER_URL}/EUX/SM-S938B/version.test.xml"
         }
+    },
+    "Galaxy S26 Ultra": {
+        "model": "SM-S948B",
+        "csc": "EUX",
+        "urls": {
+            "stable": f"{FOTA_SERVER_URL}/EUX/SM-S948B/version.xml",
+            "test": f"{FOTA_SERVER_URL}/EUX/SM-S948B/version.test.xml"
+        }
     }
 }
 
